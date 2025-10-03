@@ -29,40 +29,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin()
     {
-        Configuration loadedConfig;
-        try
-        {
-            loadedConfig = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to load existing configuration, creating new one");
-            loadedConfig = new Configuration();
-            PluginInterface.SavePluginConfig(loadedConfig);
-        }
-
-        Configuration = loadedConfig;
-
+        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Storage = new PresetStorage(PluginInterface, Log);
-
-        if (!Configuration.MigrationCompleted && Configuration.Version == 1)
-        {
-            Log.Info("Migrating from Configuration v1 to file-based storage");
-            try
-            {
-                Storage.MigrateFromConfiguration(Configuration);
-                Configuration.MigrationCompleted = true;
-                Configuration.Version = 2;
-                Configuration.Presets = null;
-                Configuration.AlwaysOnPlugins = null;
-                PluginInterface.SavePluginConfig(Configuration);
-                Log.Info("Migration completed successfully");
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Migration failed, continuing anyway");
-            }
-        }
 
         PresetManager = new PresetManager(
             PluginInterface,

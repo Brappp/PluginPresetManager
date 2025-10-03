@@ -70,11 +70,6 @@ public class PresetManager
                             && !installedPlugins[name].IsLoaded)
                 .ToList();
 
-            if (config.EnableRollback)
-            {
-                config.LastState = CreatePresetFromCurrent("__rollback__");
-                log.Info("Saved rollback state");
-            }
 
             progress?.Report($"Disabling {toDisable.Count} plugins...");
             foreach (var plugin in toDisable)
@@ -199,11 +194,6 @@ public class PresetManager
                             && !installedPlugins[name].IsLoaded)
                 .ToList();
 
-            if (config.EnableRollback)
-            {
-                config.LastState = CreatePresetFromCurrent("__rollback__");
-                log.Info("Saved rollback state");
-            }
 
             progress?.Report($"Disabling {toDisable.Count} plugins...");
             foreach (var plugin in toDisable)
@@ -432,19 +422,6 @@ public class PresetManager
         return preset;
     }
 
-    public async Task RollbackAsync()
-    {
-        if (config.LastState == null)
-        {
-            chatGui.PrintError("[Preset] No rollback state available");
-            log.Warning("Rollback requested but no state available");
-            return;
-        }
-
-        chatGui.Print("[Preset] Rolling back to previous state...");
-        log.Info("Rolling back to previous state");
-        await ApplyPresetAsync(config.LastState);
-    }
 
     public List<string> GetMissingPlugins(Preset preset)
     {

@@ -179,40 +179,4 @@ public class PresetStorage
     }
 
     #endregion
-
-    #region Migration
-
-    public void MigrateFromConfiguration(Configuration config)
-    {
-        try
-        {
-            log.Info("Starting migration from Configuration to file-based storage");
-
-            if (config.Presets != null && config.Presets.Any())
-            {
-                log.Info($"Migrating {config.Presets.Count} presets");
-                foreach (var preset in config.Presets)
-                {
-                    SavePreset(preset);
-                }
-                log.Info("Preset migration complete");
-            }
-
-            if (config.AlwaysOnPlugins != null && config.AlwaysOnPlugins.Any())
-            {
-                log.Info($"Migrating {config.AlwaysOnPlugins.Count} always-on plugins");
-                SaveAlwaysOnPlugins(config.AlwaysOnPlugins);
-                log.Info("Always-on plugins migration complete");
-            }
-
-            log.Info("Migration from Configuration completed successfully");
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "Failed to migrate from Configuration");
-            throw;
-        }
-    }
-
-    #endregion
 }

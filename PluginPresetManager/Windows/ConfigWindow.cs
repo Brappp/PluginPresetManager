@@ -14,7 +14,7 @@ public class ConfigWindow : Window, IDisposable
     public ConfigWindow(Plugin plugin)
         : base("Settings###PresetManagerSettings")
     {
-        Size = new Vector2(450, 350);
+        Size = new Vector2(400, 300);
         SizeCondition = ImGuiCond.FirstUseEver;
 
         this.plugin = plugin;
@@ -26,34 +26,6 @@ public class ConfigWindow : Window, IDisposable
 
     public override void Draw()
     {
-        ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Rollback");
-        var enableRollback = config.EnableRollback;
-        if (ImGui.Checkbox("Enable Rollback", ref enableRollback))
-        {
-            config.EnableRollback = enableRollback;
-            Plugin.PluginInterface.SavePluginConfig(config);
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip("Saves state before applying presets so you can rollback");
-        }
-
-        if (config.EnableRollback && config.LastState != null)
-        {
-            ImGui.Indent();
-            if (ImGui.Button("Rollback to Previous State"))
-            {
-                _ = presetManager.RollbackAsync();
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip("Restore the plugin state from before the last preset was applied");
-            }
-            ImGui.Unindent();
-        }
-
-        ImGui.Separator();
-
         ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Settings");
         var showNotifications = config.ShowNotifications;
         if (ImGui.Checkbox("Show Notifications", ref showNotifications))
@@ -94,27 +66,18 @@ public class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Separator();
-
         ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Info");
-
         var lastPreset = presetManager.GetLastAppliedPreset();
         if (lastPreset != null)
         {
-            ImGui.TextUnformatted($"Last Applied Preset: {lastPreset.Name}");
+            ImGui.TextUnformatted($"Last: {lastPreset.Name}");
         }
         else
         {
-            ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "No preset applied yet");
+            ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "No preset applied");
         }
-
         ImGui.Text($"Presets: {presetManager.GetAllPresets().Count} | Always-On: {presetManager.GetAlwaysOnPlugins().Count}");
-
         ImGui.Separator();
-        ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Commands");
-        ImGui.BulletText("/ppreset - Open window");
-        ImGui.BulletText("/ppm <name> - Apply preset");
-        ImGui.BulletText("/ppm alwayson - Minimal mode");
-        ImGui.Separator();
-        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "v2.0.0");
+        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "v1.0.0");
     }
 }
