@@ -44,8 +44,3 @@ The preset will enable all plugins in the preset PLUS any always-on plugins, and
 2. Click "Set Default"
 3. This preset will now automatically apply when you log in
 
-## Installation
-
-1. Build the plugin or download a release
-2. Copy the output folder to your Dalamud devPlugins directory
-3. Reload plugins in Dalamud
