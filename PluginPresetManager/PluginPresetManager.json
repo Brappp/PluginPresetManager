@@ -1,0 +1,13 @@
+{
+  "Author": "Your Name",
+  "Name": "Plugin Preset Manager",
+  "Punchline": "Manage plugin presets with always-on support.",
+  "Description": "Create and manage plugin presets with support for always-on plugins. Commands: /ppreset",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "plugin",
+    "preset",
+    "manager",
+    "utility"
+  ]
+}

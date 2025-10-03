@@ -1,0 +1,41 @@
+## Visual Studio / Rider
+.vs/
+.idea/
+.vscode/
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+## User-specific files
+*.suo
+*.user
+*.userosscache
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+*.lock.json
+project.lock.json
+
+## Build outputs
+*.ilk
+*.obj
+*.pch
+*.pdb
+*.ipdb
+*.log
+*.tlog
+*.vspscc
+*.pidb
+
+## OS
+Thumbs.db
+.DS_Store
+Desktop.ini
