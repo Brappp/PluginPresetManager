@@ -15,6 +15,7 @@ public class MainWindow : Window, IDisposable
 
     
     private readonly PluginPresetManager.Windows.Tabs.PresetsTab presetsTab;
+    private readonly PluginPresetManager.Windows.Tabs.CharactersTab charactersTab;
     private readonly PluginPresetManager.Windows.Tabs.AlwaysOnTab alwaysOnTab;
     private readonly PluginPresetManager.Windows.Tabs.AllPluginsTab allPluginsTab;
     private readonly PluginPresetManager.Windows.Tabs.HelpTab helpTab;
@@ -36,6 +37,7 @@ public class MainWindow : Window, IDisposable
 
         
         presetsTab = new PluginPresetManager.Windows.Tabs.PresetsTab(plugin, config, presetManager);
+        charactersTab = new PluginPresetManager.Windows.Tabs.CharactersTab(plugin, config, presetManager);
         alwaysOnTab = new PluginPresetManager.Windows.Tabs.AlwaysOnTab(plugin, presetManager);
         allPluginsTab = new PluginPresetManager.Windows.Tabs.AllPluginsTab(presetManager);
         helpTab = new PluginPresetManager.Windows.Tabs.HelpTab();
@@ -57,6 +59,12 @@ public class MainWindow : Window, IDisposable
             if (ImGui.BeginTabItem("Presets###tab_presets"))
             {
                 presetsTab.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Characters###tab_characters"))
+            {
+                charactersTab.Draw();
                 ImGui.EndTabItem();
             }
 

@@ -29,8 +29,9 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
-    
+
     private bool defaultPresetApplied = false;
+    private bool needsInitialCharacterTracking = false;
 
     public Plugin()
     {
@@ -57,18 +58,16 @@ public sealed class Plugin : IDalamudPlugin
             PresetManager.AddAlwaysOnPlugin(thisPluginInternalName);
         }
 
-        if (Configuration.DefaultPresetId.HasValue)
+        if (ClientState.IsLoggedIn)
         {
-            if (ClientState.IsLoggedIn)
-            {
-                Log.Info("Already logged in, applying default preset");
-                ApplyDefaultPreset();
-            }
-            else
-            {
-                ClientState.Login += OnLogin;
-                Log.Info("Default preset will apply on character login");
-            }
+            Log.Info("Already logged in, will track character on next frame");
+            needsInitialCharacterTracking = true;
+            Framework.Update += OnFrameworkUpdate;
+        }
+        else
+        {
+            ClientState.Login += OnLogin;
+            Log.Info("Waiting for login to track character and apply default preset");
         }
 
         MainWindow = new MainWindow(this);
@@ -95,7 +94,8 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         ClientState.Login -= OnLogin;
-        
+        Framework.Update -= OnFrameworkUpdate;
+
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
@@ -173,11 +173,26 @@ public sealed class Plugin : IDalamudPlugin
     {
         MainWindow.FocusSettingsTab();
     }
-    
-    private void OnLogin()
+
+    private void OnFrameworkUpdate(IFramework framework)
     {
-        Log.Info("Character logged in");
-        
+        if (needsInitialCharacterTracking)
+        {
+            needsInitialCharacterTracking = false;
+            Framework.Update -= OnFrameworkUpdate;
+
+            TrackCurrentCharacter();
+
+            if (Configuration.DefaultPresetId.HasValue)
+            {
+                Log.Info("Applying default preset");
+                ApplyDefaultPreset();
+            }
+        }
+    }
+
+    private void TrackCurrentCharacter()
+    {
         var contentId = ClientState.LocalContentId;
         if (contentId != 0)
         {
@@ -186,7 +201,12 @@ public sealed class Plugin : IDalamudPlugin
             PluginInterface.SavePluginConfig(Configuration);
             Log.Info($"Tracked character: {characterName} (ID: {contentId})");
         }
-        
+    }
+
+    private void OnLogin()
+    {
+        Log.Info("Character logged in");
+        TrackCurrentCharacter();
         ApplyDefaultPreset();
     }
     
