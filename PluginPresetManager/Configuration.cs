@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Configuration;
 using Newtonsoft.Json;
 
@@ -19,7 +20,7 @@ public enum NotificationMode
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
 
     public Guid? LastAppliedPresetId { get; set; }
 
@@ -30,6 +31,12 @@ public class Configuration : IPluginConfiguration
     public int PluginStateCheckInterval { get; set; } = 250;
     
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;
+    
+    public bool UseCharacterSpecificDefaults { get; set; } = false;
+    
+    public Dictionary<ulong, Guid?> CharacterDefaultPresets { get; set; } = new();
+    
+    public Dictionary<ulong, string> CharacterNames { get; set; } = new();
     
     [JsonProperty]
     private bool? ShowNotifications { get; set; }
@@ -61,6 +68,11 @@ public class Configuration : IPluginConfiguration
             VerboseNotifications = null;
             
             Version = 2;
+        }
+        
+        if (Version < 3)
+        {
+            Version = 3;
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -55,7 +56,19 @@ public class PresetsTab
 			{
 				var isSelected = selectedPreset == preset;
 				var isLastApplied = config.LastAppliedPresetId == preset.Id;
-				var isDefault = config.DefaultPresetId == preset.Id;
+				var isGlobalDefault = config.DefaultPresetId == preset.Id;
+				
+				var characterDefaults = new List<string>();
+				if (config.UseCharacterSpecificDefaults)
+				{
+					foreach (var kvp in config.CharacterDefaultPresets)
+					{
+						if (kvp.Value == preset.Id && config.CharacterNames.TryGetValue(kvp.Key, out var charName))
+						{
+							characterDefaults.Add(charName);
+						}
+					}
+				}
 
 				if (isLastApplied)
 				{
@@ -63,9 +76,18 @@ public class PresetsTab
 				}
 
 				var displayName = preset.Name;
-				if (isDefault)
+				if (isGlobalDefault && !config.UseCharacterSpecificDefaults)
 				{
 					displayName = $"★ {preset.Name}";
+				}
+				else if (isGlobalDefault && config.UseCharacterSpecificDefaults)
+				{
+					displayName = $"☆ {preset.Name}";
+				}
+				
+				if (characterDefaults.Count > 0 && config.UseCharacterSpecificDefaults)
+				{
+					displayName += $" [{characterDefaults.Count}]";
 				}
 
 				if (ImGui.Selectable($"{displayName}##{preset.Id}", isSelected))
@@ -92,10 +114,30 @@ public class PresetsTab
 						ImGui.Separator();
 						ImGui.TextWrapped(preset.Description);
 					}
-					if (isDefault)
+					if (isGlobalDefault)
 					{
 						ImGui.Separator();
-						ImGui.TextColored(new Vector4(1, 1, 0, 1), "★ Default (Auto-applies on login)");
+						ImGui.TextColored(new Vector4(1, 1, 0, 1), config.UseCharacterSpecificDefaults ? 
+							"☆ Global Default (Fallback)" : "★ Default (Auto-applies on login)");
+					}
+					if (characterDefaults.Count > 0)
+					{
+						ImGui.Separator();
+						ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Character Defaults:");
+						foreach (var charName in characterDefaults)
+						{
+							var isCurrentChar = Plugin.ClientState.LocalContentId != 0 && 
+								config.CharacterNames.TryGetValue(Plugin.ClientState.LocalContentId, out var currentChar) && 
+								currentChar == charName;
+							if (isCurrentChar)
+							{
+								ImGui.TextColored(new Vector4(0, 1, 0, 1), $"• {charName} (current)");
+							}
+							else
+							{
+								ImGui.TextUnformatted($"• {charName}");
+							}
+						}
 					}
 					if (isLastApplied)
 					{
@@ -240,32 +282,112 @@ public class PresetsTab
 		}
 		ImGui.SameLine();
 
-		var isDefault = config.DefaultPresetId == preset.Id;
-		if (isDefault)
+		var isGlobalDefault = config.DefaultPresetId == preset.Id;
+		var isCharacterDefault = false;
+		if (config.UseCharacterSpecificDefaults && Plugin.ClientState.LocalContentId != 0)
 		{
-			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.2f, 0.6f, 0.2f, 1));
+			config.CharacterDefaultPresets.TryGetValue(Plugin.ClientState.LocalContentId, out var charDefault);
+			isCharacterDefault = charDefault == preset.Id;
 		}
-		if (ImGui.Button(isDefault ? "Default ✓" : "Set Default", new Vector2(100, 0)))
+		
+		var buttonText = "Set Default";
+		var buttonColor = new Vector4(0.2f, 0.6f, 0.2f, 1);
+		if (isGlobalDefault && !config.UseCharacterSpecificDefaults)
 		{
-			if (isDefault)
+			buttonText = "Default ✓";
+		}
+		else if (isGlobalDefault && config.UseCharacterSpecificDefaults)
+		{
+			buttonText = "Global ✓";
+			buttonColor = new Vector4(0.2f, 0.5f, 0.6f, 1);
+		}
+		else if (isCharacterDefault)
+		{
+			buttonText = "Character ✓";
+			buttonColor = new Vector4(0.5f, 0.2f, 0.6f, 1);
+		}
+		
+		if (isGlobalDefault || isCharacterDefault)
+		{
+			ImGui.PushStyleColor(ImGuiCol.Button, buttonColor);
+		}
+		
+		if (ImGui.Button(buttonText + "###SetDefault", new Vector2(100, 0)))
+		{
+			if (config.UseCharacterSpecificDefaults)
 			{
-				config.DefaultPresetId = null;
+				ImGui.OpenPopup("DefaultPresetOptions");
 			}
 			else
 			{
-				config.DefaultPresetId = preset.Id;
+				if (isGlobalDefault)
+				{
+					config.DefaultPresetId = null;
+				}
+				else
+				{
+					config.DefaultPresetId = preset.Id;
+				}
+				Plugin.PluginInterface.SavePluginConfig(config);
 			}
-			Plugin.PluginInterface.SavePluginConfig(config);
 		}
-		if (isDefault)
+		
+		if (isGlobalDefault || isCharacterDefault)
 		{
 			ImGui.PopStyleColor();
 		}
+		
 		if (ImGui.IsItemHovered())
 		{
-			ImGui.SetTooltip(isDefault 
-				? "Click to unset as default preset" 
-				: "Set this preset to apply automatically when you log in to a character");
+			if (config.UseCharacterSpecificDefaults)
+			{
+				ImGui.SetTooltip("Click to set default options");
+			}
+			else
+			{
+				ImGui.SetTooltip(isGlobalDefault 
+					? "Click to unset as default preset" 
+					: "Set this preset to apply automatically when you log in");
+			}
+		}
+		
+		if (ImGui.BeginPopup("DefaultPresetOptions"))
+		{
+			ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), "Set Default For:");
+			ImGui.Separator();
+			
+			if (ImGui.Selectable("Global Default", isGlobalDefault))
+			{
+				config.DefaultPresetId = isGlobalDefault ? null : preset.Id;
+				Plugin.PluginInterface.SavePluginConfig(config);
+				ImGui.CloseCurrentPopup();
+			}
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Used as fallback for characters without specific defaults");
+			}
+			
+			if (Plugin.ClientState.LocalContentId != 0)
+			{
+				var charName = config.CharacterNames.TryGetValue(Plugin.ClientState.LocalContentId, out var name) 
+					? name : $"{Plugin.ClientState.LocalPlayer?.Name}@{Plugin.ClientState.LocalPlayer?.HomeWorld.Value.Name}";
+				
+				if (ImGui.Selectable($"{charName}", isCharacterDefault))
+				{
+					if (isCharacterDefault)
+					{
+						config.CharacterDefaultPresets.Remove(Plugin.ClientState.LocalContentId);
+					}
+					else
+					{
+						config.CharacterDefaultPresets[Plugin.ClientState.LocalContentId] = preset.Id;
+					}
+					Plugin.PluginInterface.SavePluginConfig(config);
+					ImGui.CloseCurrentPopup();
+				}
+			}
+			
+			ImGui.EndPopup();
 		}
 		ImGui.SameLine();
 		if (ImGui.Button("Delete", new Vector2(70, 0)))
@@ -401,6 +523,42 @@ public class PresetsTab
 			else
 			{
 				ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "No plugins. Click 'Add' to add.");
+			}
+			
+			if (config.UseCharacterSpecificDefaults)
+			{
+				ImGui.Separator();
+				ImGui.Spacing();
+				
+				var assignedCharacters = new List<(ulong id, string name)>();
+				foreach (var kvp in config.CharacterDefaultPresets)
+				{
+					if (kvp.Value == preset.Id && config.CharacterNames.TryGetValue(kvp.Key, out var charName))
+					{
+						assignedCharacters.Add((kvp.Key, charName));
+					}
+				}
+				
+				if (assignedCharacters.Count > 0)
+				{
+					ImGui.TextColored(new Vector4(0.7f, 0.9f, 1f, 1), $"Character Defaults ({assignedCharacters.Count}):");
+					foreach (var character in assignedCharacters.OrderBy(x => x.name))
+					{
+						var isCurrentChar = Plugin.ClientState.LocalContentId == character.id;
+						if (isCurrentChar)
+						{
+							ImGui.TextColored(new Vector4(0, 1, 0, 1), $"• {character.name} (current)");
+						}
+						else
+						{
+							ImGui.TextUnformatted($"• {character.name}");
+						}
+					}
+				}
+				else
+				{
+					ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1), "No characters assigned");
+				}
 			}
 
 			ImGui.EndChild();

@@ -176,20 +176,53 @@ public sealed class Plugin : IDalamudPlugin
     
     private void OnLogin()
     {
-        Log.Info("Character logged in, applying default preset");
+        Log.Info("Character logged in");
+        
+        var contentId = ClientState.LocalContentId;
+        if (contentId != 0)
+        {
+            var characterName = $"{ClientState.LocalPlayer?.Name}@{ClientState.LocalPlayer?.HomeWorld.Value.Name}";
+            Configuration.CharacterNames[contentId] = characterName;
+            PluginInterface.SavePluginConfig(Configuration);
+            Log.Info($"Tracked character: {characterName} (ID: {contentId})");
+        }
+        
         ApplyDefaultPreset();
     }
     
     private void ApplyDefaultPreset()
     {
-        if (defaultPresetApplied || !Configuration.DefaultPresetId.HasValue)
+        if (defaultPresetApplied)
             return;
             
         defaultPresetApplied = true;
         ClientState.Login -= OnLogin;
         
+        Guid? presetIdToApply = null;
+        
+        if (Configuration.UseCharacterSpecificDefaults && ClientState.LocalContentId != 0)
+        {
+            if (Configuration.CharacterDefaultPresets.TryGetValue(ClientState.LocalContentId, out var characterPresetId))
+            {
+                presetIdToApply = characterPresetId;
+                Log.Info($"Using character-specific default preset for {ClientState.LocalPlayer?.Name}");
+            }
+        }
+        
+        if (!presetIdToApply.HasValue)
+        {
+            presetIdToApply = Configuration.DefaultPresetId;
+            if (presetIdToApply.HasValue)
+            {
+                Log.Info("Using global default preset");
+            }
+        }
+        
+        if (!presetIdToApply.HasValue)
+            return;
+        
         var defaultPreset = PresetManager.GetAllPresets()
-            .FirstOrDefault(p => p.Id == Configuration.DefaultPresetId.Value);
+            .FirstOrDefault(p => p.Id == presetIdToApply.Value);
             
         if (defaultPreset != null)
         {
@@ -198,7 +231,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         else
         {
-            Log.Warning($"Default preset ID {Configuration.DefaultPresetId.Value} not found");
+            Log.Warning($"Default preset ID {presetIdToApply.Value} not found");
         }
     }
 }

@@ -21,6 +21,9 @@ public class PresetManager
 
     private List<Preset> presets = new();
     private HashSet<string> alwaysOnPlugins = new();
+    
+    private const int MaxWaitMs = 30000;
+    private const int RequiredConsecutiveChecks = 3;
 
     public PresetManager(
         IDalamudPluginInterface pluginInterface,
@@ -71,6 +74,36 @@ public class PresetManager
                 break;
         }
     }
+    
+    private async Task<bool> WaitForPluginState(string pluginInternalName, bool expectedLoadedState)
+    {
+        var waitedMs = 0;
+        var consecutiveChecks = 0;
+        
+        while (waitedMs < MaxWaitMs)
+        {
+            await Task.Delay(config.PluginStateCheckInterval);
+            waitedMs += config.PluginStateCheckInterval;
+            
+            var currentPlugin = pluginInterface.InstalledPlugins
+                .FirstOrDefault(p => p.InternalName == pluginInternalName);
+                
+            if (currentPlugin != null && currentPlugin.IsLoaded == expectedLoadedState)
+            {
+                consecutiveChecks++;
+                if (consecutiveChecks >= RequiredConsecutiveChecks)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                consecutiveChecks = 0;
+            }
+        }
+        
+        return false;
+    }
 
     public List<Preset> GetAllPresets() => presets;
 
@@ -107,27 +140,12 @@ public class PresetManager
                 var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
-                var waitedMs = 0;
-                var isDisabled = false;
-                while (!isDisabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(config.PluginStateCheckInterval);
-                    waitedMs += config.PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == plugin.InternalName);
-
-                    if (currentPlugin != null)
-                    {
-                        isDisabled = !currentPlugin.IsLoaded;
-                    }
-                }
-
+                var isDisabled = await WaitForPluginState(plugin.InternalName, false);
+                
                 if (!isDisabled)
                 {
                     failedDisable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
+                    log.Warning($"Plugin {plugin.Name} did not disable within timeout");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
@@ -140,27 +158,12 @@ public class PresetManager
                 var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
-                var waitedMs = 0;
-                var isEnabled = false;
-                while (!isEnabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(config.PluginStateCheckInterval);
-                    waitedMs += config.PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == pluginName);
-
-                    if (currentPlugin != null)
-                    {
-                        isEnabled = currentPlugin.IsLoaded;
-                    }
-                }
-
+                var isEnabled = await WaitForPluginState(pluginName, true);
+                
                 if (!isEnabled)
                 {
                     failedEnable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
+                    log.Warning($"Plugin {plugin.Name} did not enable within timeout");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
@@ -264,27 +267,12 @@ public class PresetManager
                 var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
-                var waitedMs = 0;
-                var isDisabled = false;
-                while (!isDisabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(config.PluginStateCheckInterval);
-                    waitedMs += config.PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == plugin.InternalName);
-
-                    if (currentPlugin != null)
-                    {
-                        isDisabled = !currentPlugin.IsLoaded;
-                    }
-                }
-
+                var isDisabled = await WaitForPluginState(plugin.InternalName, false);
+                
                 if (!isDisabled)
                 {
                     failedDisable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
+                    log.Warning($"Plugin {plugin.Name} did not disable within timeout");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
@@ -297,27 +285,12 @@ public class PresetManager
                 var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
-                var waitedMs = 0;
-                var isEnabled = false;
-                while (!isEnabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(config.PluginStateCheckInterval);
-                    waitedMs += config.PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == pluginName);
-
-                    if (currentPlugin != null)
-                    {
-                        isEnabled = currentPlugin.IsLoaded;
-                    }
-                }
-
+                var isEnabled = await WaitForPluginState(pluginName, true);
+                
                 if (!isEnabled)
                 {
                     failedEnable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
+                    log.Warning($"Plugin {plugin.Name} did not enable within timeout");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
