@@ -31,8 +31,12 @@ public class SettingsTab
             return;
         }
 
-        UIHelpers.SectionHeader("Notifications", FontAwesomeIcon.Bell);
+        UIHelpers.SectionHeader($"This Character — {Data.DisplayName}", FontAwesomeIcon.User);
+        ImGui.TextColored(Colors.TextMuted, "These settings follow the selected character.");
+        ImGui.Spacing();
 
+        ImGui.Text("Notifications");
+        ImGui.SameLine(160);
         ImGui.SetNextItemWidth(Sizing.InputMedium);
         var currentMode = (int)Data.NotificationMode;
         if (ImGui.Combo("##NotificationMode", ref currentMode, "None\0Toast\0Chat\0"))
@@ -40,10 +44,6 @@ public class SettingsTab
             Data.NotificationMode = (NotificationMode)currentMode;
             plugin.CharacterStorage.Save(Data);
         }
-
-        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
-
-        UIHelpers.SectionHeader("Login Behavior", FontAwesomeIcon.SignInAlt);
 
         var applyOnLogin = presetManager.ApplyDefaultOnLogin;
         if (ImGui.Checkbox("Apply default on login", ref applyOnLogin))
@@ -64,7 +64,7 @@ public class SettingsTab
         }
         else
         {
-            defaultDisplay = "None - set a default in Manage tab (star icon)";
+            defaultDisplay = "None - set a default in the Presets tab";
         }
 
         if (ImGui.IsItemHovered())
@@ -72,11 +72,14 @@ public class SettingsTab
             ImGui.SetTooltip($"When enabled, automatically applies the starred default on login.\nCurrent default: {defaultDisplay}");
         }
 
-        ImGui.TextColored(Colors.TextMuted, $"Default: {defaultDisplay}");
+        ImGui.SameLine();
+        ImGui.TextColored(Colors.TextMuted, $"({defaultDisplay})");
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
-        UIHelpers.SectionHeader("Server Info Bar", FontAwesomeIcon.Bars);
+        UIHelpers.SectionHeader("All Characters", FontAwesomeIcon.Globe);
+        ImGui.TextColored(Colors.TextMuted, "Global settings.");
+        ImGui.Spacing();
 
         var showDtrBar = GlobalConfig.ShowDtrBar;
         if (ImGui.Checkbox("Show preset selector in Server Info Bar", ref showDtrBar))
@@ -90,65 +93,49 @@ public class SettingsTab
             ImGui.SetTooltip("Adds a clickable entry to quickly switch presets.");
         }
 
-        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
-
-        UIHelpers.SectionHeader("Advanced", FontAwesomeIcon.Cog);
-
         var useExperimental = GlobalConfig.UseExperimentalPersistence;
-        if (ImGui.Checkbox("Experimental Persistent Mode", ref useExperimental))
+        if (ImGui.Checkbox("Use internal APIs for all plugins", ref useExperimental))
         {
             GlobalConfig.UseExperimentalPersistence = useExperimental;
             plugin.SaveConfiguration();
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("Plugin states persist across restarts.\nUses internal Dalamud APIs - may break on updates.");
+            ImGui.SetTooltip("Toggle all plugins through Dalamud's internal APIs instead of chat commands.\n" +
+                "Dev plugins always use this path so the exact copy is targeted.\n" +
+                "Uses internal Dalamud APIs - may break on updates.");
         }
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
-        UIHelpers.SectionHeader("Info", FontAwesomeIcon.InfoCircle);
-
         var characters = presetManager.GetAllCharacters();
-        var presets = presetManager.GetAllPresets();
-        var alwaysOn = presetManager.GetAlwaysOnPlugins();
+        UIHelpers.SectionHeader("Character Data", FontAwesomeIcon.Users);
+        ImGui.TextColored(Colors.TextMuted, $"{characters.Count} character(s) stored. Delete unused character data to clean up.");
+        ImGui.Spacing();
 
-        ImGui.TextColored(Colors.TextMuted, $"Characters: {characters.Count}");
-        ImGui.TextColored(Colors.TextMuted, $"Presets (current): {presets.Count}");
-        ImGui.TextColored(Colors.TextMuted, $"Always-On: {alwaysOn.Count}");
-
-        if (characters.Count > 0)
+        foreach (var character in characters.OrderBy(c => c.Name))
         {
-            UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
-            UIHelpers.SectionHeader("Character Data", FontAwesomeIcon.Users);
+            ImGui.Text($"{character.DisplayName}");
+            ImGui.SameLine();
+            ImGui.TextColored(Colors.TextMuted, $"({character.Presets.Count} presets, {character.AlwaysOn.Count} always-on)");
 
-            ImGui.TextColored(Colors.TextMuted, "Delete unused character data to clean up.");
-            ImGui.Spacing();
-
-            foreach (var character in characters.OrderBy(c => c.Name))
+            if (character.ContentId != presetManager.CurrentCharacterId)
             {
-                ImGui.Text($"{character.DisplayName}");
                 ImGui.SameLine();
-                ImGui.TextColored(Colors.TextMuted, $"({character.Presets.Count} presets)");
-
-                if (character.ContentId != presetManager.CurrentCharacterId)
+                using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.5f, 0.2f, 0.2f, 1f)))
+                using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.6f, 0.3f, 0.3f, 1f)))
                 {
-                    ImGui.SameLine();
-                    using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.5f, 0.2f, 0.2f, 1f)))
-                    using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.6f, 0.3f, 0.3f, 1f)))
+                    if (ImGui.SmallButton($"Delete##{character.ContentId}"))
                     {
-                        if (ImGui.SmallButton($"Delete##{character.ContentId}"))
-                        {
-                            characterToDelete = character;
-                            UIHelpers.OpenConfirmationModal("DeleteCharacter", "Delete Character Data");
-                        }
+                        characterToDelete = character;
+                        UIHelpers.OpenConfirmationModal("DeleteCharacter", "Delete Character Data");
                     }
                 }
-                else
-                {
-                    ImGui.SameLine();
-                    ImGui.TextColored(Colors.Active, "(current)");
-                }
+            }
+            else
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(Colors.Active, "(current)");
             }
         }
 

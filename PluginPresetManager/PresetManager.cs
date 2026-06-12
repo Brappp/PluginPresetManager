@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -14,10 +15,6 @@ public class PresetManager
     private const int DelayBetweenCommands = 50;
     private const int PluginStateCheckInterval = 500;
 
-    private static string GetPluginKey(IExposedPlugin plugin) => plugin.IsDev ? $"{plugin.InternalName}#dev" : plugin.InternalName;
-    private static bool IsDevKey(string key) => key.EndsWith("#dev");
-    private static string GetInternalName(string key) => key.EndsWith("#dev") ? key[..^4] : key;
-
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly ICommandManager commandManager;
     private readonly IChatGui chatGui;
@@ -28,6 +25,7 @@ public class PresetManager
     private readonly DalamudReflectionHelper reflectionHelper;
 
     private CharacterData? currentData;
+    private CancellationTokenSource? applyCts;
 
     public bool IsApplying { get; private set; }
     public string ApplyingStatus { get; private set; } = string.Empty;
@@ -55,12 +53,19 @@ public class PresetManager
         this.globalConfig = globalConfig;
         this.storage = storage;
 
-        reflectionHelper = new DalamudReflectionHelper(pluginInterface, log);
+        reflectionHelper = new DalamudReflectionHelper(log);
         if (globalConfig.UseExperimentalPersistence)
         {
             reflectionHelper.TryInitialize();
         }
+
+        NormalizeStoredKeys();
     }
+
+    public string SelfKey => PluginKey.Get(pluginInterface.InternalName, pluginInterface.IsDev);
+
+    private bool IsSelf(IExposedPlugin plugin) =>
+        plugin.InternalName == pluginInterface.InternalName && plugin.IsDev == pluginInterface.IsDev;
 
     #region Character Switching
 
@@ -78,8 +83,54 @@ public class PresetManager
         if (currentData != null)
         {
             globalConfig.LastSelectedCharacterId = contentId;
+            NormalizeStoredKeys();
             log.Info($"Switched to: {currentData.DisplayName}");
         }
+    }
+
+    public void NormalizeStoredKeys()
+    {
+        var installed = PluginKey.BuildInstalledDictionary(pluginInterface.InstalledPlugins);
+
+        var sharedChanged = NormalizeSet(storage.SharedData.AlwaysOn, installed);
+        foreach (var preset in storage.SharedData.Presets)
+            sharedChanged |= NormalizeSet(preset.Plugins, installed);
+        if (sharedChanged)
+            storage.SaveSharedData();
+
+        if (currentData == null) return;
+
+        var changed = NormalizeSet(currentData.AlwaysOn, installed);
+        foreach (var preset in currentData.Presets)
+            changed |= NormalizeSet(preset.Plugins, installed);
+        if (changed)
+            Save();
+    }
+
+    private bool NormalizeSet(HashSet<string> keys, Dictionary<string, IExposedPlugin> installed)
+    {
+        List<(string From, string To)>? remaps = null;
+        foreach (var key in keys)
+        {
+            if (installed.ContainsKey(key)) continue;
+
+            var other = PluginKey.IsDev(key)
+                ? PluginKey.GetInternalName(key)
+                : key + PluginKey.DevSuffix;
+            if (!installed.ContainsKey(other) || keys.Contains(other)) continue;
+
+            (remaps ??= new()).Add((key, other));
+        }
+
+        if (remaps == null) return false;
+
+        foreach (var (from, to) in remaps)
+        {
+            keys.Remove(from);
+            keys.Add(to);
+            log.Info($"Migrated stored plugin key '{from}' -> '{to}'");
+        }
+        return true;
     }
 
     public List<CharacterData> GetAllCharacters() => storage.GetAllCharacters();
@@ -148,6 +199,44 @@ public class PresetManager
         log.Info($"Updated preset: {preset.Name}");
     }
 
+    public bool RenamePreset(Preset preset, string newName, bool isShared)
+    {
+        newName = newName.Trim();
+        if (newName.Length == 0 || IsPresetNameTaken(newName, preset))
+            return false;
+
+        var oldName = preset.Name;
+        if (oldName == newName)
+            return true;
+
+        preset.Name = newName;
+
+        if (isShared)
+        {
+            foreach (var character in storage.GetAllCharacters())
+            {
+                var changed = false;
+                if (character.DefaultPreset == oldName) { character.DefaultPreset = newName; changed = true; }
+                if (character.LastAppliedPreset == oldName) { character.LastAppliedPreset = newName; changed = true; }
+                if (changed)
+                    storage.Save(character);
+            }
+            UpdateSharedPreset(preset);
+        }
+        else
+        {
+            if (currentData != null)
+            {
+                if (currentData.DefaultPreset == oldName) currentData.DefaultPreset = newName;
+                if (currentData.LastAppliedPreset == oldName) currentData.LastAppliedPreset = newName;
+            }
+            UpdatePreset(preset);
+        }
+
+        log.Info($"Renamed preset '{oldName}' -> '{newName}'");
+        return true;
+    }
+
     public void DeletePreset(Preset preset)
     {
         if (currentData == null) return;
@@ -160,7 +249,6 @@ public class PresetManager
                 currentData.LastAppliedPreset = null;
 
             Save();
-            ShowNotification($"Deleted preset '{preset.Name}'");
             log.Info($"Deleted preset: {preset.Name}");
         }
     }
@@ -177,7 +265,6 @@ public class PresetManager
         };
 
         AddPreset(duplicate);
-        ShowNotification($"Duplicated preset '{source.Name}'");
         return duplicate;
     }
 
@@ -190,11 +277,12 @@ public class PresetManager
             LastModified = DateTime.Now
         };
 
-        var alwaysOn = currentData?.AlwaysOn ?? new HashSet<string>();
+        NormalizeStoredKeys();
+        var alwaysOn = GetEffectiveAlwaysOnPlugins();
         foreach (var plugin in pluginInterface.InstalledPlugins)
         {
-            var key = GetPluginKey(plugin);
-            if (plugin.IsLoaded && !alwaysOn.Contains(key) && !alwaysOn.Contains(plugin.InternalName))
+            var key = PluginKey.Get(plugin);
+            if (plugin.IsLoaded && !alwaysOn.Contains(key))
             {
                 preset.Plugins.Add(key);
             }
@@ -210,7 +298,6 @@ public class PresetManager
         if (preset != null)
         {
             AddPreset(preset);
-            ShowNotification($"Imported preset '{preset.Name}'");
         }
         return preset;
     }
@@ -245,7 +332,6 @@ public class PresetManager
         if (storage.SharedData.Presets.Remove(preset))
         {
             storage.SaveSharedData();
-            ShowNotification($"Deleted shared preset '{preset.Name}'");
             log.Info($"Deleted shared preset: {preset.Name}");
         }
     }
@@ -280,8 +366,6 @@ public class PresetManager
 
             if (preset.Name != originalName)
                 ShowNotification($"Moved '{originalName}' to shared as '{preset.Name}' (name conflict)");
-            else
-                ShowNotification($"Moved '{preset.Name}' to shared presets");
 
             log.Info($"Moved preset to shared: {preset.Name}");
         }
@@ -304,7 +388,6 @@ public class PresetManager
         };
 
         AddPreset(copy);
-        ShowNotification($"Copied shared preset '{sharedPreset.Name}' to character");
     }
 
     #endregion
@@ -332,9 +415,9 @@ public class PresetManager
         return effective;
     }
 
-    public bool IsAlwaysOn(string internalName) => currentData?.AlwaysOn.Contains(internalName) ?? false;
+    public bool IsAlwaysOn(string key) => currentData?.AlwaysOn.Contains(key) ?? false;
 
-    public bool IsSharedAlwaysOn(string internalName) => storage.SharedData.AlwaysOn.Contains(internalName);
+    public bool IsSharedAlwaysOn(string key) => storage.SharedData.AlwaysOn.Contains(key);
 
     public void AddAlwaysOnPlugin(string key)
     {
@@ -344,9 +427,6 @@ public class PresetManager
         {
             Save();
             EnablePluginIfNeeded(key);
-
-            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
-            ShowNotification($"Added '{displayName}' to always-on");
             log.Info($"Added always-on: {key}");
         }
     }
@@ -358,8 +438,6 @@ public class PresetManager
         if (currentData.AlwaysOn.Remove(key))
         {
             Save();
-            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
-            ShowNotification($"Removed '{displayName}' from always-on");
             log.Info($"Removed always-on: {key}");
         }
     }
@@ -370,9 +448,6 @@ public class PresetManager
         {
             storage.SaveSharedData();
             EnablePluginIfNeeded(key);
-
-            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
-            ShowNotification($"Added '{displayName}' to shared always-on");
             log.Info($"Added shared always-on: {key}");
         }
     }
@@ -382,22 +457,22 @@ public class PresetManager
         if (storage.SharedData.AlwaysOn.Remove(key))
         {
             storage.SaveSharedData();
-            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
-            ShowNotification($"Removed '{displayName}' from shared always-on");
             log.Info($"Removed shared always-on: {key}");
         }
     }
 
     private void EnablePluginIfNeeded(string key)
     {
-        var internalName = GetInternalName(key);
-        var isDev = IsDevKey(key);
+        var internalName = PluginKey.GetInternalName(key);
+        var isDev = PluginKey.IsDev(key);
         var plugin = pluginInterface.InstalledPlugins
             .FirstOrDefault(p => p.InternalName == internalName && p.IsDev == isDev);
 
         if (plugin != null && !plugin.IsLoaded)
         {
-            commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+            _ = SetPluginStateAsync(plugin, true).ContinueWith(
+                t => log.Error(t.Exception!, $"Failed to enable {key}"),
+                TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 
@@ -442,6 +517,12 @@ public class PresetManager
 
     #region Apply Presets
 
+    public void CancelApply()
+    {
+        try { applyCts?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
     public async Task ApplyAlwaysOnOnlyAsync(IProgress<string>? progress = null)
     {
         if (IsApplying || currentData == null) return;
@@ -449,19 +530,20 @@ public class PresetManager
         IsApplying = true;
         ApplyingStatus = "Preparing...";
         ApplyingProgress = 0;
+        applyCts = new CancellationTokenSource();
 
         try
         {
             progress?.Report("Applying always-on plugins only...");
             log.Info("Starting always-on only mode");
 
-            var installedPlugins = pluginInterface.InstalledPlugins
-                .ToDictionary(p => GetPluginKey(p), p => p);
+            NormalizeStoredKeys();
+            var installedPlugins = PluginKey.BuildInstalledDictionary(pluginInterface.InstalledPlugins);
 
             var effectiveEnabledSet = GetEffectiveAlwaysOnPlugins();
 
             var toDisable = installedPlugins
-                .Where(kv => kv.Value.IsLoaded && !effectiveEnabledSet.Contains(kv.Key))
+                .Where(kv => kv.Value.IsLoaded && !effectiveEnabledSet.Contains(kv.Key) && !IsSelf(kv.Value))
                 .Select(kv => kv.Value)
                 .ToList();
 
@@ -469,7 +551,7 @@ public class PresetManager
                 .Where(key => installedPlugins.ContainsKey(key) && !installedPlugins[key].IsLoaded)
                 .ToList();
 
-            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
+            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress, applyCts.Token);
 
             currentData.LastAppliedPreset = null;
             currentData.LastAppliedWasAlwaysOn = true;
@@ -477,6 +559,11 @@ public class PresetManager
 
             ShowNotification($"Applied always-on only mode ({toEnable.Count} enabled, {toDisable.Count} disabled)");
             log.Info($"Applied always-on only: {toEnable.Count} enabled, {toDisable.Count} disabled");
+        }
+        catch (OperationCanceledException)
+        {
+            ShowNotification("Apply cancelled");
+            log.Info("Always-on only apply cancelled");
         }
         catch (Exception ex)
         {
@@ -489,6 +576,8 @@ public class PresetManager
             IsApplying = false;
             ApplyingStatus = string.Empty;
             ApplyingProgress = 0;
+            applyCts.Dispose();
+            applyCts = null;
         }
     }
 
@@ -499,14 +588,15 @@ public class PresetManager
         IsApplying = true;
         ApplyingStatus = "Preparing...";
         ApplyingProgress = 0;
+        applyCts = new CancellationTokenSource();
 
         try
         {
             progress?.Report("Validating preset...");
             log.Info($"Applying preset: {preset.Name}");
 
-            var installedPlugins = pluginInterface.InstalledPlugins
-                .ToDictionary(p => GetPluginKey(p), p => p);
+            NormalizeStoredKeys();
+            var installedPlugins = PluginKey.BuildInstalledDictionary(pluginInterface.InstalledPlugins);
 
             var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
             foreach (var alwaysOn in GetEffectiveAlwaysOnPlugins())
@@ -516,7 +606,7 @@ public class PresetManager
             }
 
             var toDisable = installedPlugins
-                .Where(kv => kv.Value.IsLoaded && !effectiveEnabledSet.Contains(kv.Key))
+                .Where(kv => kv.Value.IsLoaded && !effectiveEnabledSet.Contains(kv.Key) && !IsSelf(kv.Value))
                 .Select(kv => kv.Value)
                 .ToList();
 
@@ -524,7 +614,7 @@ public class PresetManager
                 .Where(key => installedPlugins.ContainsKey(key) && !installedPlugins[key].IsLoaded)
                 .ToList();
 
-            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
+            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress, applyCts.Token);
 
             currentData.LastAppliedPreset = preset.Name;
             currentData.LastAppliedWasAlwaysOn = false;
@@ -532,6 +622,11 @@ public class PresetManager
 
             ShowNotification($"Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
             log.Info($"Applied preset '{preset.Name}': {toEnable.Count} enabled, {toDisable.Count} disabled");
+        }
+        catch (OperationCanceledException)
+        {
+            ShowNotification("Apply cancelled");
+            log.Info($"Apply of '{preset.Name}' cancelled");
         }
         catch (Exception ex)
         {
@@ -544,6 +639,8 @@ public class PresetManager
             IsApplying = false;
             ApplyingStatus = string.Empty;
             ApplyingProgress = 0;
+            applyCts.Dispose();
+            applyCts = null;
         }
     }
 
@@ -551,7 +648,8 @@ public class PresetManager
         List<IExposedPlugin> toDisable,
         List<string> toEnable,
         Dictionary<string, IExposedPlugin> installedPlugins,
-        IProgress<string>? progress)
+        IProgress<string>? progress,
+        CancellationToken token)
     {
         var total = toDisable.Count + toEnable.Count;
         var current = 0;
@@ -559,35 +657,37 @@ public class PresetManager
         progress?.Report($"Disabling {toDisable.Count} plugins...");
         foreach (var plugin in toDisable)
         {
+            token.ThrowIfCancellationRequested();
             current++;
             ApplyingProgress = (float)current / total;
-            ApplyingStatus = $"Disabling {plugin.Name}...";
+            ApplyingStatus = $"Disabling {plugin.Name}... ({current} of {total})";
             await DisablePluginAsync(plugin);
-            await WaitForPluginState(plugin, false);
-            await Task.Delay(DelayBetweenCommands);
+            await WaitForPluginState(plugin, false, token);
+            await Task.Delay(DelayBetweenCommands, token);
         }
 
         progress?.Report($"Enabling {toEnable.Count} plugins...");
         foreach (var key in toEnable)
         {
+            token.ThrowIfCancellationRequested();
             current++;
             ApplyingProgress = (float)current / total;
             var plugin = installedPlugins[key];
-            ApplyingStatus = $"Enabling {plugin.Name}...";
+            ApplyingStatus = $"Enabling {plugin.Name}... ({current} of {total})";
             await EnablePluginAsync(plugin);
-            await WaitForPluginState(plugin, true);
-            await Task.Delay(DelayBetweenCommands);
+            await WaitForPluginState(plugin, true, token);
+            await Task.Delay(DelayBetweenCommands, token);
         }
     }
 
-    private async Task WaitForPluginState(IExposedPlugin targetPlugin, bool expectedLoaded)
+    private async Task WaitForPluginState(IExposedPlugin targetPlugin, bool expectedLoaded, CancellationToken token)
     {
         var maxWaitMs = 30000;
         var waitedMs = 0;
 
         while (waitedMs < maxWaitMs)
         {
-            await Task.Delay(PluginStateCheckInterval);
+            await Task.Delay(PluginStateCheckInterval, token);
             waitedMs += PluginStateCheckInterval;
 
             var plugin = pluginInterface.InstalledPlugins
@@ -605,9 +705,9 @@ public class PresetManager
 
     public PresetPreview GetPresetPreview(Preset preset)
     {
+        NormalizeStoredKeys();
         var preview = new PresetPreview();
-        var installedPlugins = pluginInterface.InstalledPlugins
-            .ToDictionary(p => GetPluginKey(p), p => p);
+        var installedPlugins = PluginKey.BuildInstalledDictionary(pluginInterface.InstalledPlugins);
 
         var effectiveAlwaysOn = GetEffectiveAlwaysOnPlugins();
         var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
@@ -624,6 +724,7 @@ public class PresetManager
                 {
                     InternalName = plugin.InternalName,
                     DisplayName = plugin.Name,
+                    IsDev = plugin.IsDev,
                     IsAlwaysOn = isAlwaysOn
                 });
             }
@@ -633,6 +734,7 @@ public class PresetManager
                 {
                     InternalName = plugin.InternalName,
                     DisplayName = plugin.Name,
+                    IsDev = plugin.IsDev,
                     IsAlwaysOn = isAlwaysOn
                 });
             }
@@ -642,6 +744,7 @@ public class PresetManager
                 {
                     InternalName = plugin.InternalName,
                     DisplayName = plugin.Name,
+                    IsDev = plugin.IsDev,
                     IsAlwaysOn = isAlwaysOn
                 });
             }
@@ -660,11 +763,8 @@ public class PresetManager
 
     public List<string> GetMissingPlugins(Preset preset)
     {
-        var installed = pluginInterface.InstalledPlugins
-            .Select(p => p.InternalName)
-            .ToHashSet();
-
-        return preset.Plugins.Where(p => !installed.Contains(p)).ToList();
+        var installed = PluginKey.BuildInstalledDictionary(pluginInterface.InstalledPlugins);
+        return preset.Plugins.Where(p => !installed.ContainsKey(p)).ToList();
     }
 
     #endregion
@@ -677,28 +777,31 @@ public class PresetManager
             storage.Save(currentData);
     }
 
-    private async Task EnablePluginAsync(IExposedPlugin plugin)
-    {
-        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
-        {
-            var success = await reflectionHelper.SetPluginStateAsync(plugin, true);
-            if (success) return;
-            log.Warning($"Fallback to command for {plugin.Name}");
-        }
+    private Task EnablePluginAsync(IExposedPlugin plugin) => SetPluginStateAsync(plugin, true);
 
-        commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+    private Task DisablePluginAsync(IExposedPlugin plugin) => SetPluginStateAsync(plugin, false);
+
+    private bool NeedsExactTargeting(IExposedPlugin plugin)
+    {
+        if (plugin.IsDev) return true;
+        return pluginInterface.InstalledPlugins
+            .Any(p => p.InternalName == plugin.InternalName && p.IsDev != plugin.IsDev);
     }
 
-    private async Task DisablePluginAsync(IExposedPlugin plugin)
+    private async Task SetPluginStateAsync(IExposedPlugin plugin, bool enabled)
     {
-        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
+        var needsExact = NeedsExactTargeting(plugin);
+        if (globalConfig.UseExperimentalPersistence || needsExact)
         {
-            var success = await reflectionHelper.SetPluginStateAsync(plugin, false);
-            if (success) return;
-            log.Warning($"Fallback to command for {plugin.Name}");
+            if (await reflectionHelper.SetPluginStateAsync(plugin, enabled))
+                return;
+
+            log.Warning(needsExact
+                ? $"Exact targeting failed for {PluginKey.Get(plugin)}; falling back to a name-based command which may hit the wrong copy"
+                : $"Fallback to command for {plugin.Name}");
         }
 
-        commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
+        commandManager.ProcessCommand($"/xl{(enabled ? "enable" : "disable")}plugin \"{plugin.InternalName}\"");
     }
 
     private void ShowNotification(string message, bool isError = false)

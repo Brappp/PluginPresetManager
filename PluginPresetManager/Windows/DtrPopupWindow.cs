@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Bindings.ImGui;
 using PluginPresetManager.UI;
@@ -59,7 +60,7 @@ public class DtrPopupWindow : Window
     public override void Draw()
     {
         isHovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
-        var width = 160f;
+        var width = 160f * ImGuiHelpers.GlobalScale;
 
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Right) || ImGui.IsKeyPressed(ImGuiKey.Escape))
         {
@@ -165,7 +166,7 @@ public class DtrPopupWindow : Window
 
     private bool DrawMenuItem(string label, bool isActive)
     {
-        var width = 160f;
+        var width = 160f * ImGuiHelpers.GlobalScale;
 
         var headerColor = isActive
             ? new Vector4(0.2f, 0.4f, 0.2f, 1f)
@@ -174,12 +175,18 @@ public class DtrPopupWindow : Window
             ? new Vector4(0.25f, 0.5f, 0.25f, 1f)
             : new Vector4(0.3f, 0.3f, 0.3f, 1f);
 
+        var displayLabel = isActive ? $"> {label}" : $"   {label}";
+        bool clicked;
         using (ImRaii.PushColor(ImGuiCol.Header, headerColor))
         using (ImRaii.PushColor(ImGuiCol.HeaderHovered, hoverColor))
         {
-            var displayLabel = isActive ? $"> {label}" : $"   {label}";
-            return ImGui.Selectable(displayLabel, false, ImGuiSelectableFlags.None, new Vector2(width, 0));
+            clicked = ImGui.Selectable(displayLabel, false, ImGuiSelectableFlags.None, new Vector2(width, 0));
         }
+
+        if (ImGui.IsItemHovered() && ImGui.CalcTextSize(displayLabel).X > width)
+            ImGui.SetTooltip(label);
+
+        return clicked;
     }
 
     public new void Toggle()
@@ -192,8 +199,8 @@ public class DtrPopupWindow : Window
         {
             var mousePos = ImGui.GetMousePos();
             var displaySize = ImGui.GetIO().DisplaySize;
-            var windowWidth = 170f;
-            var estimatedHeight = 200f;
+            var windowWidth = 170f * ImGuiHelpers.GlobalScale;
+            var estimatedHeight = 200f * ImGuiHelpers.GlobalScale;
 
             var posX = mousePos.X - windowWidth / 2;
             var posY = mousePos.Y + 5;

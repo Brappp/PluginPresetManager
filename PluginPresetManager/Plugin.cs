@@ -298,11 +298,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void EnsureAlwaysOn()
     {
-        var thisPluginInternalName = PluginInterface.InternalName;
-        if (!PresetManager.GetAlwaysOnPlugins().Contains(thisPluginInternalName))
+        var selfKey = PresetManager.SelfKey;
+        if (!PresetManager.GetEffectiveAlwaysOnPlugins().Contains(selfKey))
         {
             Log.Info("Adding PluginPresetManager to always-on list to prevent self-disable");
-            PresetManager.AddAlwaysOnPlugin(thisPluginInternalName);
+            PresetManager.AddAlwaysOnPlugin(selfKey);
         }
     }
 

@@ -23,6 +23,12 @@ public static class Colors
 
     public static readonly Vector4 TagDev = new(1f, 0.4f, 1f, 1f);
     public static readonly Vector4 TagThirdParty = new(1f, 1f, 0.4f, 1f);
+
+    public static readonly Vector4 ButtonPrimary = new(0.12f, 0.31f, 0.47f, 1f);
+    public static readonly Vector4 ButtonPrimaryHover = new(0.15f, 0.37f, 0.58f, 1f);
+    public static readonly Vector4 ButtonDefault = new(0.3f, 0.3f, 0.1f, 1f);
+    public static readonly Vector4 LoadedDot = new(0.4f, 1f, 0.6f, 0.9f);
+    public static readonly Vector4 UnloadedDot = new(0.45f, 0.45f, 0.45f, 0.9f);
 }
 
 public static class Sizing

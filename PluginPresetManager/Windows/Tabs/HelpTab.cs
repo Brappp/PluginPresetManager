@@ -16,14 +16,16 @@ public class HelpTab
         DrawCommand("/ppm", "Toggle this window");
         DrawCommand("/ppm <name>", "Apply preset by name");
         DrawCommand("/ppm alwayson", "Disable all except always-on");
+        DrawCommand("/ppm rescueall", "Rescue all off-screen windows");
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
         UIHelpers.SectionHeader("Tips", FontAwesomeIcon.Lightbulb);
 
-        ImGui.BulletText("Set a default preset to auto-apply on login");
+        ImGui.BulletText("Click a preset to edit it, use the play button to apply it");
         ImGui.BulletText("Use always-on for essential plugins");
-        ImGui.BulletText("Right-click presets in Manage for quick actions");
+        ImGui.BulletText("Dev plugins are tracked separately from repo copies and tagged [DEV]");
+        ImGui.BulletText("Right-click presets for quick actions");
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 

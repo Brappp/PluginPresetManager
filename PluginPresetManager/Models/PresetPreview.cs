@@ -13,6 +13,7 @@ public class PresetPreview
     {
         public string InternalName { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
+        public bool IsDev { get; set; }
         public bool IsAlwaysOn { get; set; }
     }
 }

@@ -1,37 +1,47 @@
 using System;
+using System.Collections;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
 namespace PluginPresetManager;
 
-// Uses reflection to access Dalamud's internal ProfileManager.
-// This makes plugin states persist across game restarts.
-// May break on Dalamud updates since it uses internal APIs.
 public class DalamudReflectionHelper
 {
     private readonly IPluginLog log;
-    private readonly IDalamudPluginInterface pluginInterface;
 
-    private Assembly? dalamudAssembly;
-    private Type? serviceType;
-    private Type? profileManagerType;
     private object? profileManager;
-    private object? defaultProfile;
+    private object? pluginManager;
+    private object? dalamudConfig;
 
+    private PropertyInfo? profilesProperty;
+    private PropertyInfo? defaultProfileProperty;
+    private MethodInfo? wantsPluginMethod;
     private MethodInfo? addOrUpdateMethod;
+
+    private PropertyInfo? installedPluginsProperty;
+    private PropertyInfo? manifestProperty;
+    private PropertyInfo? internalNameProperty;
     private PropertyInfo? workingPluginIdProperty;
+    private PropertyInfo? stateProperty;
+    private MethodInfo? loadAsyncMethod;
+    private MethodInfo? unloadAsyncMethod;
+    private object? unloadDisposalMode;
+
+    private Type? localDevPluginType;
+    private PropertyInfo? startOnBootProperty;
+    private MethodInfo? queueSaveMethod;
 
     private bool initialized = false;
     private bool initializationFailed = false;
 
     public bool IsAvailable => initialized && !initializationFailed;
 
-    public DalamudReflectionHelper(IDalamudPluginInterface pluginInterface, IPluginLog log)
+    public DalamudReflectionHelper(IPluginLog log)
     {
-        this.pluginInterface = pluginInterface;
         this.log = log;
     }
 
@@ -41,247 +51,208 @@ public class DalamudReflectionHelper
         if (initializationFailed) return false;
 
         initialized = true;
+        initializationFailed = true;
 
         try
         {
             log.Info("Initializing reflection helper...");
 
-            dalamudAssembly = AppDomain.CurrentDomain.GetAssemblies()
+            var dalamudAssembly = AppDomain.CurrentDomain.GetAssemblies()
                 .FirstOrDefault(a => a.GetName().Name == "Dalamud");
-
             if (dalamudAssembly == null)
-            {
-                log.Warning("Dalamud assembly not found");
-                initializationFailed = true;
-                return false;
-            }
+                return Fail("Dalamud assembly not found");
 
-            serviceType = dalamudAssembly.GetType("Dalamud.Service`1");
+            var serviceType = dalamudAssembly.GetType("Dalamud.Service`1");
             if (serviceType == null)
+                return Fail("Service<T> type not found");
+
+            object? GetService(string typeName)
             {
-                log.Warning("Service<T> type not found");
-                initializationFailed = true;
-                return false;
+                var type = dalamudAssembly.GetType(typeName);
+                if (type == null) return null;
+                var getMethod = serviceType.MakeGenericType(type).GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
+                return getMethod?.Invoke(null, null);
             }
 
-            profileManagerType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Profiles.ProfileManager");
-            if (profileManagerType == null)
-            {
-                log.Warning("ProfileManager type not found");
-                initializationFailed = true;
-                return false;
-            }
-
-            var genericService = serviceType.MakeGenericType(profileManagerType);
-            var getMethod = genericService.GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
-            if (getMethod == null)
-            {
-                log.Warning("Service<ProfileManager>.Get not found");
-                initializationFailed = true;
-                return false;
-            }
-
-            profileManager = getMethod.Invoke(null, null);
+            profileManager = GetService("Dalamud.Plugin.Internal.Profiles.ProfileManager");
             if (profileManager == null)
-            {
-                log.Warning("ProfileManager is null");
-                initializationFailed = true;
-                return false;
-            }
+                return Fail("ProfileManager not available");
 
-            var defaultProfileProp = profileManagerType.GetProperty("DefaultProfile");
-            if (defaultProfileProp == null)
-            {
-                log.Warning("DefaultProfile property not found");
-                initializationFailed = true;
-                return false;
-            }
+            pluginManager = GetService("Dalamud.Plugin.Internal.PluginManager");
+            if (pluginManager == null)
+                return Fail("PluginManager not available");
 
-            defaultProfile = defaultProfileProp.GetValue(profileManager);
-            if (defaultProfile == null)
-            {
-                log.Warning("DefaultProfile is null");
-                initializationFailed = true;
-                return false;
-            }
+            dalamudConfig = GetService("Dalamud.Configuration.Internal.DalamudConfiguration");
+            queueSaveMethod = dalamudConfig?.GetType().GetMethod("QueueSave", BindingFlags.Instance | BindingFlags.Public);
 
-            var profileType = defaultProfile.GetType();
+            var profileManagerType = profileManager.GetType();
+            profilesProperty = profileManagerType.GetProperty("Profiles");
+            defaultProfileProperty = profileManagerType.GetProperty("DefaultProfile");
+            if (profilesProperty == null || defaultProfileProperty == null)
+                return Fail("ProfileManager.Profiles/DefaultProfile not found");
+
+            var profileType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Profiles.Profile");
+            if (profileType == null)
+                return Fail("Profile type not found");
+
+            wantsPluginMethod = profileType.GetMethod("WantsPlugin", new[] { typeof(Guid) });
             addOrUpdateMethod = profileType.GetMethod("AddOrUpdateAsync",
-                BindingFlags.Instance | BindingFlags.Public,
-                null,
-                new[] { typeof(Guid), typeof(string), typeof(bool), typeof(bool) },
-                null);
+                new[] { typeof(Guid), typeof(string), typeof(bool), typeof(bool) });
+            if (wantsPluginMethod == null || addOrUpdateMethod == null)
+                return Fail("Profile.WantsPlugin/AddOrUpdateAsync not found");
 
-            if (addOrUpdateMethod == null)
-            {
-                log.Warning("AddOrUpdateAsync method not found");
-                initializationFailed = true;
-                return false;
-            }
+            installedPluginsProperty = pluginManager.GetType().GetProperty("InstalledPlugins", BindingFlags.Instance | BindingFlags.Public);
+            if (installedPluginsProperty == null)
+                return Fail("PluginManager.InstalledPlugins not found");
 
             var localPluginType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Types.LocalPlugin");
-            if (localPluginType != null)
-            {
-                workingPluginIdProperty = localPluginType.GetProperty("EffectiveWorkingPluginId");
-            }
+            localDevPluginType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Types.LocalDevPlugin");
+            if (localPluginType == null || localDevPluginType == null)
+                return Fail("LocalPlugin/LocalDevPlugin types not found");
 
+            manifestProperty = localPluginType.GetProperty("Manifest");
+            internalNameProperty = localPluginType.GetProperty("InternalName");
+            workingPluginIdProperty = localPluginType.GetProperty("EffectiveWorkingPluginId");
+            stateProperty = localPluginType.GetProperty("State");
+            startOnBootProperty = localDevPluginType.GetProperty("StartOnBoot");
+            if (manifestProperty == null || internalNameProperty == null || workingPluginIdProperty == null || stateProperty == null)
+                return Fail("LocalPlugin members not found");
+
+            var loadReasonType = typeof(PluginLoadReason);
+            loadAsyncMethod = localPluginType.GetMethod("LoadAsync",
+                new[] { loadReasonType, typeof(bool), typeof(CancellationToken) });
+            if (loadAsyncMethod == null)
+                return Fail("LocalPlugin.LoadAsync not found");
+
+            var disposalModeType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Types.PluginLoaderDisposalMode");
+            if (disposalModeType == null)
+                return Fail("PluginLoaderDisposalMode type not found");
+
+            unloadDisposalMode = Enum.Parse(disposalModeType, "WaitBeforeDispose");
+            unloadAsyncMethod = localPluginType.GetMethod("UnloadAsync", new[] { disposalModeType });
+            if (unloadAsyncMethod == null)
+                return Fail("LocalPlugin.UnloadAsync not found");
+
+            initializationFailed = false;
             log.Info("Reflection helper ready");
             return true;
         }
         catch (Exception ex)
         {
             log.Error(ex, "Failed to initialize reflection helper");
-            initializationFailed = true;
             return false;
         }
+    }
+
+    private bool Fail(string reason)
+    {
+        log.Warning($"Reflection helper unavailable: {reason}");
+        return false;
     }
 
     public async Task<bool> SetPluginStateAsync(IExposedPlugin plugin, bool enabled)
     {
-        if (!IsAvailable)
-        {
-            log.Warning("Reflection helper not available");
+        if (!TryInitialize())
             return false;
-        }
 
         try
         {
-            var workingId = GetWorkingPluginId(plugin);
-            if (workingId == Guid.Empty)
+            var localPlugin = ResolveLocalPlugin(plugin);
+            if (localPlugin == null)
             {
-                log.Warning($"Could not get plugin ID for {plugin.InternalName}");
+                log.Warning($"Could not resolve LocalPlugin for {plugin.InternalName} (Dev: {plugin.IsDev})");
                 return false;
             }
 
-            var task = (Task?)addOrUpdateMethod!.Invoke(defaultProfile, new object[]
+            var workingId = workingPluginIdProperty!.GetValue(localPlugin) as Guid? ?? Guid.Empty;
+            if (workingId == Guid.Empty)
             {
-                workingId,
-                plugin.InternalName,
-                enabled,
-                true
-            });
-
-            if (task != null)
-            {
-                await task;
+                log.Warning($"Empty working plugin ID for {plugin.InternalName} (Dev: {plugin.IsDev})");
+                return false;
             }
 
-            log.Info($"Set persistent state: {plugin.InternalName} = {enabled}");
+            var state = stateProperty!.GetValue(localPlugin)?.ToString();
+            if (state is "LoadError" or "UnloadError")
+            {
+                log.Warning($"{plugin.InternalName} is in state {state}, not touching it");
+                return false;
+            }
+
+            var profiles = ((IEnumerable)profilesProperty!.GetValue(profileManager)!)
+                .Cast<object>()
+                .Where(p => wantsPluginMethod!.Invoke(p, new object[] { workingId }) != null)
+                .ToList();
+
+            object? profile = profiles.Count switch
+            {
+                1 => profiles[0],
+                0 => defaultProfileProperty!.GetValue(profileManager),
+                _ => null,
+            };
+
+            if (profile == null)
+            {
+                log.Warning($"{plugin.InternalName} is in multiple collections, cannot toggle it");
+                return false;
+            }
+
+            if (enabled)
+            {
+                await InvokeTask(addOrUpdateMethod!.Invoke(profile, new object[] { workingId, plugin.InternalName, true, false }));
+
+                if (localDevPluginType!.IsInstanceOfType(localPlugin) && startOnBootProperty != null)
+                {
+                    startOnBootProperty.SetValue(localPlugin, true);
+                    queueSaveMethod?.Invoke(dalamudConfig, null);
+                }
+
+                if (state != "Loaded")
+                    await InvokeTask(loadAsyncMethod!.Invoke(localPlugin, new object[] { PluginLoadReason.Installer, false, CancellationToken.None }));
+            }
+            else
+            {
+                if (state == "Loaded")
+                    await InvokeTask(unloadAsyncMethod!.Invoke(localPlugin, new[] { unloadDisposalMode! }));
+
+                await InvokeTask(addOrUpdateMethod!.Invoke(profile, new object[] { workingId, plugin.InternalName, false, false }));
+            }
+
+            log.Info($"Set plugin state: {PluginKey.Get(plugin)} = {enabled}");
             return true;
         }
         catch (Exception ex)
         {
-            log.Error(ex, $"Failed to set state for {plugin.InternalName}");
+            log.Error(ex, $"Failed to set state for {plugin.InternalName} (Dev: {plugin.IsDev})");
             return false;
         }
     }
 
-    private Guid GetWorkingPluginId(IExposedPlugin plugin)
+    private object? ResolveLocalPlugin(IExposedPlugin plugin)
     {
-        try
+        if (installedPluginsProperty!.GetValue(pluginManager) is not IEnumerable installedPlugins)
+            return null;
+
+        object? fallbackMatch = null;
+        foreach (var localPlugin in installedPlugins)
         {
-            // Try to get the LocalPlugin from the wrapper
-            var exposedPluginType = plugin.GetType();
+            var manifest = manifestProperty!.GetValue(localPlugin);
+            if (ReferenceEquals(manifest, plugin.Manifest))
+                return localPlugin;
 
-            var localPluginField = exposedPluginType.GetField("localPlugin", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (localPluginField == null)
+            if (fallbackMatch == null
+                && internalNameProperty!.GetValue(localPlugin) as string == plugin.InternalName
+                && localDevPluginType!.IsInstanceOfType(localPlugin) == plugin.IsDev)
             {
-                localPluginField = exposedPluginType.GetField("plugin", BindingFlags.Instance | BindingFlags.NonPublic);
+                fallbackMatch = localPlugin;
             }
-
-            object? localPlugin = null;
-            if (localPluginField != null)
-            {
-                localPlugin = localPluginField.GetValue(plugin);
-            }
-            else
-            {
-                var localPluginProp = exposedPluginType.GetProperty("LocalPlugin", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                if (localPluginProp != null)
-                {
-                    localPlugin = localPluginProp.GetValue(plugin);
-                }
-            }
-
-            if (localPlugin != null && workingPluginIdProperty != null)
-            {
-                var id = workingPluginIdProperty.GetValue(localPlugin);
-                if (id is Guid guid)
-                {
-                    return guid;
-                }
-            }
-
-            // Fall back to searching in PluginManager
-            return GetWorkingPluginIdFromProfileManager(plugin.InternalName);
         }
-        catch (Exception ex)
-        {
-            log.Error(ex, $"Failed to get plugin ID for {plugin.InternalName}");
-            return Guid.Empty;
-        }
+
+        return fallbackMatch;
     }
 
-    private Guid GetWorkingPluginIdFromProfileManager(string internalName)
+    private static async Task InvokeTask(object? result)
     {
-        try
-        {
-            if (profileManager == null || dalamudAssembly == null)
-                return Guid.Empty;
-
-            var pluginManagerType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.PluginManager");
-            if (pluginManagerType == null)
-                return Guid.Empty;
-
-            var genericService = serviceType!.MakeGenericType(pluginManagerType);
-            var getMethod = genericService.GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
-            if (getMethod == null)
-                return Guid.Empty;
-
-            var pluginManager = getMethod.Invoke(null, null);
-            if (pluginManager == null)
-                return Guid.Empty;
-
-            var installedPluginsProp = pluginManagerType.GetProperty("InstalledPlugins", BindingFlags.Instance | BindingFlags.Public);
-            if (installedPluginsProp == null)
-                return Guid.Empty;
-
-            var installedPlugins = installedPluginsProp.GetValue(pluginManager) as System.Collections.IEnumerable;
-            if (installedPlugins == null)
-                return Guid.Empty;
-
-            foreach (var localPlugin in installedPlugins)
-            {
-                var manifestProp = localPlugin.GetType().GetProperty("Manifest");
-                if (manifestProp == null) continue;
-
-                var manifest = manifestProp.GetValue(localPlugin);
-                if (manifest == null) continue;
-
-                var internalNameProp = manifest.GetType().GetProperty("InternalName");
-                if (internalNameProp == null) continue;
-
-                var pluginInternalName = internalNameProp.GetValue(manifest) as string;
-                if (pluginInternalName == internalName)
-                {
-                    var idProp = localPlugin.GetType().GetProperty("EffectiveWorkingPluginId");
-                    if (idProp != null)
-                    {
-                        var id = idProp.GetValue(localPlugin);
-                        if (id is Guid guid)
-                        {
-                            return guid;
-                        }
-                    }
-                }
-            }
-
-            return Guid.Empty;
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, $"Failed to get plugin ID from PluginManager for {internalName}");
-            return Guid.Empty;
-        }
+        if (result is Task task)
+            await task;
     }
 }
