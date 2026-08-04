@@ -35,13 +35,16 @@ public sealed class Plugin : IDalamudPlugin
     public Configuration Configuration { get; init; }
     public CharacterStorage CharacterStorage { get; init; }
     public PresetManager PresetManager { get; init; }
-    public WindowRescueHelper WindowRescueHelper { get; init; }
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
     private DtrPopupWindow DtrPopupWindow { get; init; }
 
     private ulong lastDefaultPresetAppliedForCharacter = 0;
+    private int characterInitAttempts = 0;
+    private const int MaxCharacterInitAttempts = 100;
+
+    public ulong ActiveContentId { get; private set; }
 
     public Plugin()
     {
@@ -57,32 +60,17 @@ public sealed class Plugin : IDalamudPlugin
             CommandManager,
             ChatGui,
             NotificationManager,
+            Framework,
             Log,
             Configuration,
             CharacterStorage);
 
-        WindowRescueHelper = new WindowRescueHelper(Log);
-
         ClientState.Login += OnLogin;
         ClientState.Logout += OnLogout;
 
-        if (ClientState.IsLoggedIn && PlayerState.ContentId != 0)
+        if (ClientState.IsLoggedIn)
         {
-            Framework.RunOnFrameworkThread(() =>
-            {
-                var localPlayer = ObjectTable.LocalPlayer;
-                var name = localPlayer?.Name.ToString() ?? "Unknown";
-                var world = localPlayer?.HomeWorld.ValueNullable?.Name.ToString() ?? "";
-                PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
-                Log.Info($"Already logged in as {name}, loaded character data");
-
-                EnsureAlwaysOn();
-
-                if (!string.IsNullOrEmpty(PresetManager.DefaultPreset))
-                {
-                    ApplyDefaultPreset();
-                }
-            });
+            Framework.RunOnFrameworkThread(InitializeCharacter);
         }
         else
         {
@@ -102,7 +90,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandNameShort, new CommandInfo(OnCommandShort)
         {
-            HelpMessage = "Apply a preset by name, 'alwayson' to disable all except always-on, or 'rescueall' to rescue off-screen windows. Usage: /ppm <preset name|alwayson|rescueall>"
+            HelpMessage = "Apply a preset by name or 'alwayson' to disable all except always-on. Usage: /ppm <preset name|alwayson>"
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -197,6 +185,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        PresetManager.CancelApply();
+
         Framework.Update -= OnFrameworkUpdate;
 
         RemoveDtrBar();
@@ -239,18 +229,6 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        if (argument.Equals("rescueall", StringComparison.OrdinalIgnoreCase))
-        {
-            var count = WindowRescueHelper.RescueAllOffScreen();
-            NotificationManager.AddNotification(new Notification
-            {
-                Content = count > 0 ? $"Rescued {count} off-screen window(s)" : "No off-screen windows found",
-                Type = count > 0 ? NotificationType.Success : NotificationType.Info,
-                Title = "Window Rescue"
-            });
-            return;
-        }
-
         var preset = PresetManager.GetPresetByName(argument);
 
         if (preset != null)
@@ -268,24 +246,25 @@ public sealed class Plugin : IDalamudPlugin
             });
 
             var allPresets = PresetManager.GetAllPresets();
-            if (allPresets.Any())
+            var sharedPresets = PresetManager.GetSharedPresets();
+            if (allPresets.Any() || sharedPresets.Any())
             {
                 ChatGui.Print("[Preset] Available presets:");
                 foreach (var p in allPresets)
                 {
                     ChatGui.Print($"  - {p.Name}");
                 }
-                ChatGui.Print("[Preset] Special commands:");
-                ChatGui.Print("  - alwayson (disable everything except always-on plugins)");
-                ChatGui.Print("  - rescueall (rescue all off-screen windows)");
+                foreach (var p in sharedPresets)
+                {
+                    ChatGui.Print($"  - {p.Name} (shared)");
+                }
             }
             else
             {
                 ChatGui.Print("[Preset] No presets available. Use /ppreset to create one.");
-                ChatGui.Print("[Preset] Special commands:");
-                ChatGui.Print("  - alwayson (disable everything except always-on plugins)");
-                ChatGui.Print("  - rescueall (rescue all off-screen windows)");
             }
+            ChatGui.Print("[Preset] Special commands:");
+            ChatGui.Print("  - alwayson (disable everything except always-on plugins)");
         }
     }
 
@@ -293,7 +272,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OpenConfigUi()
     {
-        MainWindow.FocusSettingsTab();
+        MainWindow.OpenSettings();
     }
 
     private void EnsureAlwaysOn()
@@ -308,26 +287,49 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnLogin()
     {
-        Framework.RunOnFrameworkThread(() =>
-        {
-            if (PlayerState.ContentId != 0)
-            {
-                var localPlayer = ObjectTable.LocalPlayer;
-                var name = localPlayer?.Name.ToString() ?? "Unknown";
-                var world = localPlayer?.HomeWorld.ValueNullable?.Name.ToString() ?? "";
-                PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
-                Log.Info($"Character logged in: {name} @ {world}");
+        characterInitAttempts = 0;
+        Framework.RunOnFrameworkThread(InitializeCharacter);
+    }
 
-                EnsureAlwaysOn();
-                ApplyDefaultPreset();
+    private void InitializeCharacter()
+    {
+        if (!ClientState.IsLoggedIn)
+            return;
+
+        var contentId = PlayerState.ContentId;
+        var localPlayer = ObjectTable.LocalPlayer;
+
+        if (contentId == 0 || localPlayer == null)
+        {
+            if (characterInitAttempts++ < MaxCharacterInitAttempts)
+            {
+                Framework.RunOnTick(InitializeCharacter, delayTicks: 30);
             }
-        });
+            else
+            {
+                Log.Warning("Could not resolve logged-in character; presets will load when the window is opened");
+            }
+            return;
+        }
+
+        var name = localPlayer.Name.ToString();
+        var world = localPlayer.HomeWorld.ValueNullable?.Name.ToString() ?? "";
+
+        ActiveContentId = contentId;
+        PresetManager.SwitchCharacter(contentId, name, world);
+        Log.Info($"Character logged in: {name} @ {world}");
+
+        EnsureAlwaysOn();
+        ApplyDefaultPreset();
     }
 
     private void OnLogout(int type, int code)
     {
         Log.Info("Character logged out, resetting state");
         lastDefaultPresetAppliedForCharacter = 0;
+        characterInitAttempts = 0;
+        ActiveContentId = 0;
+        PresetManager.ClearCharacter();
     }
 
     private async void ApplyDefaultPreset()
@@ -338,6 +340,12 @@ public sealed class Plugin : IDalamudPlugin
 
         if (!PresetManager.ApplyDefaultOnLogin)
             return;
+
+        if (PresetManager.IsApplying)
+        {
+            Log.Info("Skipping default apply: another apply is already in progress");
+            return;
+        }
 
         if (PresetManager.UseAlwaysOnAsDefault)
         {

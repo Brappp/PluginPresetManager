@@ -91,7 +91,7 @@ public class CharacterStorage
             newData.NotificationMode = pendingMigrationData.NotificationMode;
 
             pendingMigrationData = null;
-            MarkMigrationComplete();
+            ClearPendingMigrationFile();
         }
 
         characters[contentId] = newData;
@@ -167,12 +167,24 @@ public class CharacterStorage
                 var data = LoadFile(file);
                 if (data != null && data.ContentId != 0)
                 {
+                    ReconcileDefaultFlags(data);
                     characters[data.ContentId] = data;
                 }
             }
         }
 
         log.Info($"Loaded {characters.Count} character(s)");
+    }
+
+    private void ReconcileDefaultFlags(CharacterData data)
+    {
+        var hasDefault = data.UseAlwaysOnAsDefault || !string.IsNullOrEmpty(data.DefaultPreset);
+        if (hasDefault && !data.ApplyDefaultOnLogin)
+        {
+            data.ApplyDefaultOnLogin = true;
+            Save(data);
+            log.Info($"Enabled apply-on-login for {data.DisplayName}: a default was set but the old opt-in flag was off");
+        }
     }
 
     private CharacterData? LoadFile(string filePath)
@@ -187,7 +199,21 @@ public class CharacterStorage
         catch (Exception ex)
         {
             log.Error(ex, $"Failed to load: {filePath}");
+            BackupUnreadableFile(filePath);
             return null;
+        }
+    }
+
+    private void BackupUnreadableFile(string filePath)
+    {
+        try
+        {
+            File.Copy(filePath, filePath + ".bak", overwrite: true);
+            log.Warning($"Backed up unreadable file to {filePath}.bak");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, $"Failed to back up unreadable file: {filePath}");
         }
     }
 
@@ -208,6 +234,7 @@ public class CharacterStorage
         catch (Exception ex)
         {
             log.Error(ex, "Failed to load shared data");
+            BackupUnreadableFile(sharedDataPath);
             sharedData = new SharedData();
         }
     }
@@ -229,10 +256,16 @@ public class CharacterStorage
 
     #region Migration
 
+    private string PendingMigrationPath => Path.Combine(baseDirectory, "pending_migration.json");
+
     private void CheckForPendingMigration()
     {
         var migrationMarker = Path.Combine(baseDirectory, "v2_migrated");
-        if (File.Exists(migrationMarker)) return;
+        if (File.Exists(migrationMarker))
+        {
+            LoadPendingMigrationFile();
+            return;
+        }
 
         log.Info("Checking for data to migrate...");
 
@@ -244,11 +277,56 @@ public class CharacterStorage
         if (pendingMigrationData.Presets.Count == 0 && pendingMigrationData.AlwaysOn.Count == 0)
         {
             pendingMigrationData = null;
-            MarkMigrationComplete();
         }
         else
         {
+            SavePendingMigrationFile();
             log.Info($"Found {pendingMigrationData.Presets.Count} presets and {pendingMigrationData.AlwaysOn.Count} always-on plugins pending migration");
+        }
+
+        MarkMigrationComplete();
+    }
+
+    private void LoadPendingMigrationFile()
+    {
+        if (!File.Exists(PendingMigrationPath)) return;
+
+        try
+        {
+            var json = File.ReadAllText(PendingMigrationPath);
+            pendingMigrationData = JsonConvert.DeserializeObject<CharacterData>(json);
+            if (pendingMigrationData != null)
+                log.Info("Loaded pending migration data waiting for first character login");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to load pending migration data");
+            pendingMigrationData = null;
+        }
+    }
+
+    private void SavePendingMigrationFile()
+    {
+        try
+        {
+            File.WriteAllText(PendingMigrationPath, JsonConvert.SerializeObject(pendingMigrationData, Formatting.Indented));
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to save pending migration data");
+        }
+    }
+
+    private void ClearPendingMigrationFile()
+    {
+        try
+        {
+            if (File.Exists(PendingMigrationPath))
+                File.Delete(PendingMigrationPath);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "Failed to delete pending migration file");
         }
     }
 

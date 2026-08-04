@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.Utility;
@@ -14,6 +15,7 @@ public class DtrPopupWindow : Window
     private bool justOpened = false;
     private bool isHovered = false;
     private bool wasApplying = false;
+    private long lastAutoCloseTick;
 
     public DtrPopupWindow(Plugin plugin)
         : base("###PresetQuickSelect",
@@ -53,6 +55,7 @@ public class DtrPopupWindow : Window
         }
         else if (IsOpen && !presetManager.IsApplying && !isHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
+            lastAutoCloseTick = Environment.TickCount64;
             IsOpen = false;
         }
     }
@@ -147,11 +150,6 @@ public class DtrPopupWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
 
-        if (DrawMenuItem("Rescue Windows", false))
-        {
-            plugin.WindowRescueHelper.RescueAllOffScreen();
-        }
-
         if (DrawMenuItem("Open Manager...", false))
         {
             plugin.ToggleMainUi();
@@ -197,6 +195,10 @@ public class DtrPopupWindow : Window
         }
         else
         {
+            if (Environment.TickCount64 - lastAutoCloseTick < 250)
+                return;
+
+            wasApplying = false;
             var mousePos = ImGui.GetMousePos();
             var displaySize = ImGui.GetIO().DisplaySize;
             var windowWidth = 170f * ImGuiHelpers.GlobalScale;

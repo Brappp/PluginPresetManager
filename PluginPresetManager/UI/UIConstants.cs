@@ -29,6 +29,15 @@ public static class Colors
     public static readonly Vector4 ButtonDefault = new(0.3f, 0.3f, 0.1f, 1f);
     public static readonly Vector4 LoadedDot = new(0.4f, 1f, 0.6f, 0.9f);
     public static readonly Vector4 UnloadedDot = new(0.45f, 0.45f, 0.45f, 0.9f);
+
+    public static readonly Vector4 BannerActiveBg = new(0.10f, 0.14f, 0.11f, 1f);
+    public static readonly Vector4 BannerApplyingBg = new(0.16f, 0.14f, 0.08f, 1f);
+    public static readonly Vector4 PanelBg = new(1f, 1f, 1f, 0.035f);
+    public static readonly Vector4 InsetBg = new(0f, 0f, 0f, 0.28f);
+    public static readonly Vector4 RowStripe = new(1f, 1f, 1f, 0.02f);
+    public static readonly Vector4 ButtonActive = new(0.11f, 0.22f, 0.15f, 1f);
+    public static readonly Vector4 ButtonActiveText = new(0.5f, 0.89f, 0.64f, 1f);
+    public static readonly Vector4 DetailTitle = new(0.93f, 0.95f, 0.96f, 1f);
 }
 
 public static class Sizing

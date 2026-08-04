@@ -2,6 +2,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using PluginPresetManager.Models;
 using PluginPresetManager.UI;
@@ -23,21 +24,31 @@ public class SettingsTab
     private CharacterData Data => presetManager.CurrentData;
     private Configuration GlobalConfig => plugin.Configuration;
 
+    private static float Scale => ImGuiHelpers.GlobalScale;
+
     public void Draw()
     {
-        if (!presetManager.HasCharacter)
+        if (presetManager.HasCharacter)
         {
-            ImGui.TextColored(Colors.Warning, "Please log in to a character to access settings.");
-            return;
+            DrawCharacterSection();
+            UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
         }
 
+        DrawGlobalSection();
+        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
+        DrawCharacterDataSection();
+        DrawDeleteConfirmation();
+    }
+
+    private void DrawCharacterSection()
+    {
         UIHelpers.SectionHeader($"This Character — {Data.DisplayName}", FontAwesomeIcon.User);
-        ImGui.TextColored(Colors.TextMuted, "These settings follow the selected character.");
-        ImGui.Spacing();
+
+        var labelWidth = 130 * Scale;
 
         ImGui.Text("Notifications");
-        ImGui.SameLine(160);
-        ImGui.SetNextItemWidth(Sizing.InputMedium);
+        ImGui.SameLine(labelWidth);
+        ImGui.SetNextItemWidth(Sizing.InputMedium * Scale);
         var currentMode = (int)Data.NotificationMode;
         if (ImGui.Combo("##NotificationMode", ref currentMode, "None\0Toast\0Chat\0"))
         {
@@ -45,41 +56,31 @@ public class SettingsTab
             plugin.CharacterStorage.Save(Data);
         }
 
-        var applyOnLogin = presetManager.ApplyDefaultOnLogin;
-        if (ImGui.Checkbox("Apply default on login", ref applyOnLogin))
-        {
-            presetManager.SetApplyDefaultOnLogin(applyOnLogin);
-        }
-
-        string defaultDisplay;
+        ImGui.Text("On login");
+        ImGui.SameLine(labelWidth);
         if (presetManager.UseAlwaysOnAsDefault)
         {
-            var charCount = presetManager.GetAlwaysOnPlugins().Count;
-            var sharedCount = presetManager.GetSharedAlwaysOnPlugins().Count;
-            defaultDisplay = $"Always-On ({charCount} character + {sharedCount} shared)";
+            ImGui.TextColored(Colors.Star, "★ Always-On Only");
         }
         else if (!string.IsNullOrEmpty(presetManager.DefaultPreset))
         {
-            defaultDisplay = $"Preset: {presetManager.DefaultPreset}";
+            ImGui.TextColored(Colors.Star, $"★ {presetManager.DefaultPreset}");
         }
         else
         {
-            defaultDisplay = "None - set a default in the Presets tab";
+            ImGui.TextColored(Colors.TextMuted, "Nothing — no default set");
         }
-
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip($"When enabled, automatically applies the starred default on login.\nCurrent default: {defaultDisplay}");
-        }
-
         ImGui.SameLine();
-        ImGui.TextColored(Colors.TextMuted, $"({defaultDisplay})");
+        ImGui.TextColored(Colors.TextDisabled, "· set with the ★ button on a preset");
+        if (ImGui.IsItemHovered() || ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+        {
+            ImGui.SetTooltip("The starred default is applied automatically when this character logs in.\nStar a preset (or Always-On) in its editor to change it.");
+        }
+    }
 
-        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
-
+    private void DrawGlobalSection()
+    {
         UIHelpers.SectionHeader("All Characters", FontAwesomeIcon.Globe);
-        ImGui.TextColored(Colors.TextMuted, "Global settings.");
-        ImGui.Spacing();
 
         var showDtrBar = GlobalConfig.ShowDtrBar;
         if (ImGui.Checkbox("Show preset selector in Server Info Bar", ref showDtrBar))
@@ -105,23 +106,59 @@ public class SettingsTab
                 "Dev plugins always use this path so the exact copy is targeted.\n" +
                 "Uses internal Dalamud APIs - may break on updates.");
         }
+    }
 
-        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
-
+    private void DrawCharacterDataSection()
+    {
         var characters = presetManager.GetAllCharacters();
         UIHelpers.SectionHeader("Character Data", FontAwesomeIcon.Users);
         ImGui.TextColored(Colors.TextMuted, $"{characters.Count} character(s) stored. Delete unused character data to clean up.");
         ImGui.Spacing();
 
+        using var tableStyle = UIHelpers.PushTableStyle();
+        using var table = ImRaii.Table("##CharacterData", 4,
+            ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH);
+        if (!table) return;
+
+        var scale = ImGuiHelpers.GlobalScale;
+        ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Presets", ImGuiTableColumnFlags.WidthFixed, 58 * scale);
+        ImGui.TableSetupColumn("Always-On", ImGuiTableColumnFlags.WidthFixed, 74 * scale);
+        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed, 72 * scale);
+        UIHelpers.TintedHeadersRow();
+
         foreach (var character in characters.OrderBy(c => c.Name))
         {
-            ImGui.Text($"{character.DisplayName}");
-            ImGui.SameLine();
-            ImGui.TextColored(Colors.TextMuted, $"({character.Presets.Count} presets, {character.AlwaysOn.Count} always-on)");
+            var isLoggedIn = character.ContentId == plugin.ActiveContentId;
+            var isViewing = character.ContentId == presetManager.CurrentCharacterId;
 
-            if (character.ContentId != presetManager.CurrentCharacterId)
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(isLoggedIn ? Colors.Active : Colors.TextNormal, character.Name);
+            if (!string.IsNullOrEmpty(character.World))
             {
                 ImGui.SameLine();
+                ImGui.TextColored(Colors.TextMuted, $"@ {character.World}");
+            }
+            if (isViewing && !isLoggedIn)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(Colors.TextMuted, "(viewing)");
+            }
+
+            ImGui.TableNextColumn();
+            UIHelpers.CenteredTableText(character.Presets.Count.ToString(), Colors.TextMuted);
+
+            ImGui.TableNextColumn();
+            UIHelpers.CenteredTableText(character.AlwaysOn.Count.ToString(), Colors.TextMuted);
+
+            ImGui.TableNextColumn();
+            if (isLoggedIn)
+            {
+                UIHelpers.CenteredTableText("logged in", Colors.Active);
+            }
+            else
+            {
                 using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.5f, 0.2f, 0.2f, 1f)))
                 using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.6f, 0.3f, 0.3f, 1f)))
                 {
@@ -132,35 +169,37 @@ public class SettingsTab
                     }
                 }
             }
-            else
-            {
-                ImGui.SameLine();
-                ImGui.TextColored(Colors.Active, "(current)");
-            }
         }
-
-        DrawDeleteConfirmation();
     }
 
     private void DrawDeleteConfirmation()
     {
-        if (characterToDelete != null)
-        {
-            var result = UIHelpers.ConfirmationModal(
-                "DeleteCharacter",
-                "Delete Character Data",
-                $"Delete all data for '{characterToDelete.DisplayName}'?\n\n" +
-                $"This will remove {characterToDelete.Presets.Count} preset(s) and cannot be undone.");
+        if (characterToDelete == null)
+            return;
 
-            if (result == true)
+        var result = UIHelpers.ConfirmationModal(
+            "DeleteCharacter",
+            "Delete Character Data",
+            $"Delete all data for '{characterToDelete.DisplayName}'?\n\n" +
+            $"This will remove {characterToDelete.Presets.Count} preset(s) and cannot be undone.");
+
+        if (result == true)
+        {
+            var deletedId = characterToDelete.ContentId;
+            presetManager.DeleteCharacter(deletedId);
+
+            if (presetManager.CurrentCharacterId == deletedId)
             {
-                presetManager.DeleteCharacter(characterToDelete.ContentId);
-                characterToDelete = null;
+                if (plugin.ActiveContentId != 0)
+                    presetManager.SwitchCharacter(plugin.ActiveContentId);
+                else
+                    presetManager.ClearCharacter();
             }
-            else if (result == false)
-            {
-                characterToDelete = null;
-            }
+            characterToDelete = null;
+        }
+        else if (result == false || !ImGui.IsPopupOpen("Delete Character Data##DeleteCharacter"))
+        {
+            characterToDelete = null;
         }
     }
 }

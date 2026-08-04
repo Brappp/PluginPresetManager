@@ -19,6 +19,7 @@ public class PresetManager
     private readonly ICommandManager commandManager;
     private readonly IChatGui chatGui;
     private readonly INotificationManager notificationManager;
+    private readonly IFramework framework;
     private readonly IPluginLog log;
     private readonly Configuration globalConfig;
     private readonly CharacterStorage storage;
@@ -41,6 +42,7 @@ public class PresetManager
         ICommandManager commandManager,
         IChatGui chatGui,
         INotificationManager notificationManager,
+        IFramework framework,
         IPluginLog log,
         Configuration globalConfig,
         CharacterStorage storage)
@@ -49,6 +51,7 @@ public class PresetManager
         this.commandManager = commandManager;
         this.chatGui = chatGui;
         this.notificationManager = notificationManager;
+        this.framework = framework;
         this.log = log;
         this.globalConfig = globalConfig;
         this.storage = storage;
@@ -131,6 +134,12 @@ public class PresetManager
             log.Info($"Migrated stored plugin key '{from}' -> '{to}'");
         }
         return true;
+    }
+
+    public void ClearCharacter()
+    {
+        currentData = null;
+        log.Info("Cleared active character");
     }
 
     public List<CharacterData> GetAllCharacters() => storage.GetAllCharacters();
@@ -332,6 +341,19 @@ public class PresetManager
         if (storage.SharedData.Presets.Remove(preset))
         {
             storage.SaveSharedData();
+
+            foreach (var character in storage.GetAllCharacters())
+            {
+                if (character.Presets.Any(p => p.Name.Equals(preset.Name, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var changed = false;
+                if (character.DefaultPreset == preset.Name) { character.DefaultPreset = null; changed = true; }
+                if (character.LastAppliedPreset == preset.Name) { character.LastAppliedPreset = null; changed = true; }
+                if (changed)
+                    storage.Save(character);
+            }
+
             log.Info($"Deleted shared preset: {preset.Name}");
         }
     }
@@ -492,6 +514,7 @@ public class PresetManager
 
         currentData.DefaultPreset = presetName;
         currentData.UseAlwaysOnAsDefault = false;
+        currentData.ApplyDefaultOnLogin = presetName != null;
         Save();
     }
 
@@ -502,13 +525,6 @@ public class PresetManager
         currentData.UseAlwaysOnAsDefault = value;
         if (value)
             currentData.DefaultPreset = null;
-        Save();
-    }
-
-    public void SetApplyDefaultOnLogin(bool value)
-    {
-        if (currentData == null) return;
-
         currentData.ApplyDefaultOnLogin = value;
         Save();
     }
@@ -801,7 +817,9 @@ public class PresetManager
                 : $"Fallback to command for {plugin.Name}");
         }
 
-        commandManager.ProcessCommand($"/xl{(enabled ? "enable" : "disable")}plugin \"{plugin.InternalName}\"");
+        var internalName = plugin.InternalName;
+        await framework.RunOnFrameworkThread(() =>
+            commandManager.ProcessCommand($"/xl{(enabled ? "enable" : "disable")}plugin \"{internalName}\""));
     }
 
     private void ShowNotification(string message, bool isError = false)

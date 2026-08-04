@@ -16,7 +16,6 @@ public class HelpTab
         DrawCommand("/ppm", "Toggle this window");
         DrawCommand("/ppm <name>", "Apply preset by name");
         DrawCommand("/ppm alwayson", "Disable all except always-on");
-        DrawCommand("/ppm rescueall", "Rescue all off-screen windows");
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
@@ -31,7 +30,7 @@ public class HelpTab
 
         UIHelpers.SectionHeader("Links", FontAwesomeIcon.ExternalLinkAlt);
 
-        if (ImGui.Button("GitHub", new Vector2(Sizing.ButtonMedium, 0)))
+        if (ImGui.Button("GitHub", new Vector2(Sizing.ButtonMedium * Dalamud.Interface.Utility.ImGuiHelpers.GlobalScale, 0)))
         {
             Dalamud.Utility.Util.OpenLink("https://github.com/Brappp/PluginPresetManager");
         }
@@ -45,7 +44,7 @@ public class HelpTab
         }
         ImGui.SameLine();
         ImGui.TextColored(Colors.Warning, cmd);
-        ImGui.SameLine(140);
+        ImGui.SameLine(140 * Dalamud.Interface.Utility.ImGuiHelpers.GlobalScale);
         ImGui.TextColored(Colors.TextMuted, desc);
     }
 }
